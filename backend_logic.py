@@ -12,8 +12,14 @@ from langchain.agents import initialize_agent, AgentType, Tool
 from langchain.tools import tool
 
 # Load API Key from .env file
-load_dotenv()
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+import streamlit as st # Add this import if not present
+
+# Load API Key (Try Streamlit Secrets first, then Fallback to .env)
+try:
+    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+except:
+    load_dotenv()
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # ---------------------------------------------------------
 # 1. HELPER: DYNAMIC DATA LOADING & CREATION
