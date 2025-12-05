@@ -1,8 +1,15 @@
 import streamlit as st
 import pandas as pd
+import os
+from datetime import datetime, timedelta
 from langchain_community.callbacks import StreamlitCallbackHandler
-from backend_logic import get_hr_agent, calculate_hike_impact, simulate_employee_updates_logic, reset_demo_data
 
+# IMPORT load_data TO FIX THE DROPDOWN ISSUE
+from backend_logic import get_hr_agent, calculate_hike_impact, simulate_employee_updates_logic, reset_demo_data, load_data
+
+# ---------------------------------------------------------
+# 1. PAGE CONFIGURATION & INITIALIZATION
+# ---------------------------------------------------------
 st.set_page_config(page_title="Agentic HR Demo", page_icon="🤖", layout="wide")
 
 st.markdown("""
@@ -12,16 +19,26 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# CRITICAL FIX: Ensure Data Exists Before UI Loads
+# This prevents the "Missing Dropdown" bug on first load or after reset.
+if not os.path.exists("employees.csv"):
+    with st.spinner("Initializing HR Database..."):
+        load_data()
+
+# ---------------------------------------------------------
+# 2. SIDEBAR - "COMMAND CENTER"
+# ---------------------------------------------------------
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/4712/4712109.png", width=100)
     st.title("HR Command Center")
     
-    # LOAD DROPDOWN DATA
+    # LOAD DROPDOWN DATA (Now guaranteed to exist)
     try:
         df_ui = pd.read_csv("employees.csv")
         emp_names = sorted(df_ui['Name'].astype(str).tolist())
         depts = sorted(df_ui['Department'].unique().tolist())
-    except:
+    except Exception as e:
+        st.error(f"Data Error: {e}")
         emp_names = []
         depts = []
 
@@ -43,7 +60,7 @@ with st.sidebar:
     st.graphviz_chart(workflow_dot)
     st.markdown("---")
     
-    # 1. STRATEGIC INSIGHTS (UPDATED FOR TABLES)
+    # 1. STRATEGIC INSIGHTS (TERMS & TRENDS)
     st.subheader("📈 Terms & Trends")
     
     # Global View
@@ -51,6 +68,7 @@ with st.sidebar:
         st.session_state.prompt_trigger = "Calculate the total Headcount for EACH Department. **Mandatory: Output the result as a Markdown Table with columns: Department | Headcount.**"
 
     st.caption("Attrition Drill-Down:")
+    # Dropdowns are populated now!
     sel_dept = st.selectbox("Department:", depts, key="dept_select")
     analysis_type = st.selectbox("View Trend By:", ["Year over Year (2024-2025)", "Monthly Breakdown (All Time)"])
     
@@ -97,18 +115,24 @@ with st.sidebar:
     hike_slider = st.slider("Hike %", 0, 40, 15)
     
     if st.button("Run Compensation Model"):
-        selected_id = df_ui[df_ui['Name'] == comp_name]['Employee_ID'].values[0]
-        result = calculate_hike_impact(selected_id, hike_slider)
-        st.session_state.messages.append({"role": "assistant", "content": result})
-        st.rerun()
+        # Safe lookup in case data changed
+        try:
+            selected_id = df_ui[df_ui['Name'] == comp_name]['Employee_ID'].values[0]
+            result = calculate_hike_impact(selected_id, hike_slider)
+            st.session_state.messages.append({"role": "assistant", "content": result})
+            st.rerun()
+        except:
+            st.error("Employee not found. Try resetting data.")
         
     st.markdown("---")
     if st.button("⚠️ Reset Data"):
         reset_demo_data()
-        st.warning("Data Reset.")
+        st.warning("Data Reset. Refreshing...")
         st.rerun()
 
-# MAIN CHAT
+# ---------------------------------------------------------
+# 3. MAIN CHAT INTERFACE
+# ---------------------------------------------------------
 st.title("🤖 Unified Agentic HR Assistant")
 st.markdown("Ask about *Attrition*, *Engagement*, *Policy*, or *Data Quality*.")
 
