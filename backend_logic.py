@@ -1,7 +1,9 @@
+import streamlit as st # Needed for secrets handling
 import os
 import pandas as pd
 import numpy as np
 import random
+import faker
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -11,13 +13,14 @@ from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe
 from langchain.agents import initialize_agent, AgentType, Tool
 from langchain.tools import tool
 
-# Load API Key from .env file
-import streamlit as st # Add this import if not present
-
-# Load API Key (Try Streamlit Secrets first, then Fallback to .env)
+# ---------------------------------------------------------
+# 0. API KEY SETUP (Hybrid Support for Cloud & Local)
+# ---------------------------------------------------------
+# Try to get the key from Streamlit Cloud Secrets first
 try:
     GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 except:
+    # Fallback to local .env file
     load_dotenv()
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
@@ -27,8 +30,10 @@ except:
 def load_data():
     """
     Loads fresh data from CSVs every time it is called.
-    Auto-creates dummy data files if they don't exist.
+    CRITICAL: If files are missing (like on Cloud), it GENERATES them first.
     """
+    fake = faker.Faker()
+    
     try:
         # --- A. DEFINE THE COMPLEX POLICY TEXT ---
         # We write this to file every time to ensure the Demo has the right rules.
@@ -60,22 +65,80 @@ def load_data():
         with open("hr_policy.txt", "w") as f:
             f.write(complex_policy_text)
 
-        # --- B. ENSURE BASE FILES EXIST ---
-        if not os.path.exists("benefits_log.csv"):
-            pd.DataFrame(columns=["Employee_ID", "Benefit_Type", "Status", "Timestamp"]).to_csv("benefits_log.csv", index=False)
+        # --- B. CORE DATA GENERATION (Employees, Candidates, etc.) ---
+        if not os.path.exists("employees.csv"):
+            # 1. EMPLOYEES GENERATION
+            employees = []
+            departments = ['IT', 'HR', 'Sales', 'Marketing', 'Finance', 'Legal']
+            roles = {
+                'IT': ['Python Dev', 'Data Analyst', 'CTO', 'Support Lead', 'DevOps Eng'],
+                'HR': ['HR BP', 'Recruiter', 'L&D Specialist'],
+                'Sales': ['Sales Exec', 'Account Manager', 'VP Sales'],
+                'Marketing': ['Content Writer', 'CMO', 'Brand Mgr', 'SEO Specialist'],
+                'Finance': ['Accountant', 'CFO', 'Auditor', 'Financial Analyst'],
+                'Legal': ['Legal Counsel', 'Compliance Officer']
+            }
             
-        df_emp = pd.read_csv("employees.csv")
-        df_cand = pd.read_csv("candidates.csv")
-        df_onb = pd.read_csv("onboarding.csv")
-        df_cont = pd.read_csv("emergency_contacts.csv")
-        
-        # --- C. GENERATE ATTRITION DATA (2024-2025 TRENDS) ---
-        # This ensures we have data for "Year over Year" analysis
+            for i in range(1, 101):
+                dept = random.choice(departments)
+                role = random.choice(roles[dept])
+                join_date = fake.date_between(start_date='-5y', end_date='today')
+                email = f"{fake.first_name().lower()}.{fake.last_name().lower()}@company.com"
+                
+                # Dirty Data injection (Missing emails for 10% of users)
+                if random.random() < 0.10: email = None 
+                
+                employees.append({
+                    "Employee_ID": 100 + i,
+                    "Name": fake.name(),
+                    "Department": dept,
+                    "Role": role,
+                    "Email": email,
+                    "Join_Date": join_date,
+                    "Salary": random.randint(50000, 180000)
+                })
+            pd.DataFrame(employees).to_csv("employees.csv", index=False)
+            
+            # 2. EMERGENCY CONTACTS (Missing for last 20 people)
+            contacts = []
+            for i in range(101, 180): 
+                contacts.append({
+                    "Employee_ID": i,
+                    "Contact_Name": fake.name(),
+                    "Relation": random.choice(["Spouse", "Parent", "Sibling"]),
+                    "Phone": fake.phone_number()
+                })
+            pd.DataFrame(contacts).to_csv("emergency_contacts.csv", index=False)
+
+            # 3. CANDIDATES
+            candidates = []
+            for i in range(1, 41):
+                candidates.append({
+                    "Candidate_ID": 900 + i,
+                    "Name": fake.name(),
+                    "Applied_Role": random.choice(['Python Dev', 'Sales Exec', 'HR BP']),
+                    "Skills": random.choice(["Python, SQL", "Sales, CRM", "Java, AWS", "Recruiting"]),
+                    "Status": random.choice(["New", "Interview", "Rejected", "Offer Released"])
+                })
+            pd.DataFrame(candidates).to_csv("candidates.csv", index=False)
+            
+            # 4. ONBOARDING
+            onb = []
+            for i in range(1, 6):
+                onb.append({
+                    "Employee_Name": fake.name(),
+                    "Task": "Submit ID",
+                    "Status": random.choice(["Pending", "Done"]),
+                    "Due_Date": "2025-12-10"
+                })
+            pd.DataFrame(onb).to_csv("onboarding.csv", index=False)
+
+        # --- C. ATTRITION & ENGAGEMENT GENERATION ---
         if not os.path.exists("attrition.csv"):
             att_data = []
-            depts = sorted(df_emp['Department'].unique().tolist())
+            depts = ['IT', 'HR', 'Sales', 'Marketing', 'Finance', 'Legal']
             
-            # Generate data for 2 full years (Jan 2024 to Dec 2025)
+            # Generate 2 years of history (2024-2025) for Year-Over-Year analysis
             start_date = datetime(2024, 1, 1)
             end_date = datetime(2025, 12, 30)
             
@@ -92,33 +155,39 @@ def load_data():
                     "Tenure_Years": random.randint(1, 8),
                     "Manager_ID": random.choice([101, 104, 108, 110])
                 })
-            df_att = pd.DataFrame(att_data)
-            df_att.to_csv("attrition.csv", index=False)
-        else:
-            df_att = pd.read_csv("attrition.csv")
+            pd.DataFrame(att_data).to_csv("attrition.csv", index=False)
 
-        # --- D. GENERATE ENGAGEMENT DATA ---
-        # Needed for the "Performance vs Engagement" insights
         if not os.path.exists("engagement.csv"):
+            # Need employee IDs to map engagement
+            temp_emp = pd.read_csv("employees.csv")
             eng_data = []
-            for eid in df_emp['Employee_ID']:
+            for eid in temp_emp['Employee_ID']:
                 eng_data.append({
                     "Employee_ID": eid,
-                    "Engagement_Score": random.randint(1, 10), # 1-10 Scale
-                    "Performance_Rating": random.choice([1, 2, 3, 3, 4, 4, 5]), # 1-5 Scale
+                    "Engagement_Score": random.randint(1, 10),
+                    "Performance_Rating": random.choice([1, 2, 3, 3, 4, 4, 5]),
                     "Last_Survey_Date": "2025-11-01"
                 })
-            df_eng = pd.DataFrame(eng_data)
-            df_eng.to_csv("engagement.csv", index=False)
-        else:
-            df_eng = pd.read_csv("engagement.csv")
+            pd.DataFrame(eng_data).to_csv("engagement.csv", index=False)
+            
+        if not os.path.exists("benefits_log.csv"):
+             pd.DataFrame(columns=["Employee_ID", "Benefit_Type", "Status", "Timestamp"]).to_csv("benefits_log.csv", index=False)
 
-        # Clean Emails (ensure NaNs are None for easier processing)
+        # --- D. LOAD EVERYTHING ---
+        df_emp = pd.read_csv("employees.csv")
+        df_cand = pd.read_csv("candidates.csv")
+        df_onb = pd.read_csv("onboarding.csv")
+        df_cont = pd.read_csv("emergency_contacts.csv")
+        df_att = pd.read_csv("attrition.csv")
+        df_eng = pd.read_csv("engagement.csv")
+
+        # Clean NaNs
         df_emp['Email'] = df_emp['Email'].replace({np.nan: None, "": None})
             
         return df_emp, df_cand, df_onb, df_cont, df_att, df_eng, complex_policy_text
+
     except Exception as e:
-        print(f"Error loading data: {e}")
+        print(f"CRITICAL ERROR IN LOAD_DATA: {e}")
         return None, None, None, None, None, None, ""
 
 # ---------------------------------------------------------
@@ -126,77 +195,42 @@ def load_data():
 # ---------------------------------------------------------
 
 def reset_demo_data():
-    """
-    Resets the data to a 'Messy' state for the demo.
-    It intentionally removes emails and deletes contact rows.
-    """
-    # Force delete generated files to trigger fresh creation on next load
-    if os.path.exists("attrition.csv"): os.remove("attrition.csv")
-    if os.path.exists("engagement.csv"): os.remove("engagement.csv")
-    
-    df_emp = pd.read_csv("employees.csv")
-    df_cont = pd.read_csv("emergency_contacts.csv")
-    
-    # Corrupt Emails (Set 15% to Empty)
-    for idx in df_emp.index:
-        if pd.isna(df_emp.at[idx, 'Email']):
-             # Temp fill to ensure we can delete randomly
-             df_emp.at[idx, 'Email'] = f"user{idx}@company.com"
-        
-        if random.random() < 0.15: 
-            df_emp.at[idx, 'Email'] = None
-
-    # Corrupt Contacts (Drop 20% of rows)
-    df_cont = df_cont.sample(frac=0.8)
-    
-    df_emp.to_csv("employees.csv", index=False)
-    df_cont.to_csv("emergency_contacts.csv", index=False)
-    
-    return "🔄 **RESET COMPLETE:** Data has been corrupted and date ranges refreshed. Ready for demo."
+    """Resets all data files to messy/initial state."""
+    files = ["employees.csv", "attrition.csv", "engagement.csv", "emergency_contacts.csv"]
+    for f in files:
+        if os.path.exists(f): os.remove(f)
+    return "🔄 **RESET COMPLETE:** All data deleted. It will auto-regenerate on next action."
 
 def simulate_employee_updates_logic():
     """
     Simulates employees fixing their data.
     Returns a MARKDOWN TABLE of the updates for the Chat UI.
     """
-    import faker
     fake = faker.Faker()
-    
     df_emp = pd.read_csv("employees.csv")
     df_cont = pd.read_csv("emergency_contacts.csv")
-    
     updated_email_records = []
-    new_contact_records = []
     
     # 1. Fix Emails
     for index, row in df_emp.iterrows():
         if pd.isna(row['Email']) or row['Email'] == "":
             new_email = f"{str(row['Name']).split()[0].lower()}.{random.randint(100,999)}@company.com"
             df_emp.at[index, 'Email'] = new_email
-            updated_email_records.append({
-                "Name": row['Name'],
-                "New_Email": new_email
-            })
+            updated_email_records.append({"Name": row['Name'], "New_Email": new_email})
             
     df_emp.to_csv("employees.csv", index=False)
     
     # 2. Fix Contacts
     missing_ids = list(set(df_emp['Employee_ID']) - set(df_cont['Employee_ID']))
     new_contacts = []
-    
     for emp_id in missing_ids:
         c_name = fake.name()
-        c_rel = random.choice(["Spouse", "Parent"])
         new_contacts.append({
-            "Employee_ID": emp_id,
-            "Contact_Name": c_name,
-            "Relation": c_rel,
+            "Employee_ID": emp_id, 
+            "Contact_Name": c_name, 
+            "Relation": "Spouse", 
             "Phone": fake.phone_number()
         })
-        try:
-            e_name = df_emp[df_emp['Employee_ID'] == emp_id]['Name'].values[0]
-        except: e_name = "Unknown"
-        new_contact_records.append({"Name": e_name, "New_Contact": f"{c_name} ({c_rel})"})
     
     if new_contacts:
         df_cont = pd.concat([df_cont, pd.DataFrame(new_contacts)], ignore_index=True)
@@ -206,14 +240,7 @@ def simulate_employee_updates_logic():
     report = ["✅ **SYSTEM UPDATE SUCCESSFUL**\n"]
     if updated_email_records:
         report.append(pd.DataFrame(updated_email_records).to_markdown(index=False))
-    if new_contact_records:
-        report.append("\n**Added Emergency Contacts:**")
-        report.append(pd.DataFrame(new_contact_records).head(5).to_markdown(index=False))
-        if len(new_contact_records) > 5: report.append(f"...and {len(new_contact_records)-5} more.")
-             
-    if not updated_email_records and not new_contact_records:
-        return "✅ **System Checked:** No missing data found."
-
+    if not updated_email_records and not new_contacts: return "✅ **System Checked:** No missing data found."
     return "\n".join(report)
 
 def calculate_hike_impact(emp_id: int, hike_percent: float) -> str:
@@ -221,55 +248,34 @@ def calculate_hike_impact(emp_id: int, hike_percent: float) -> str:
     Calculates salary impact using the Rich Format (Tenure, Band Position, Recommendations).
     """
     from datetime import datetime
-    
-    # We load data here to ensure we have the latest salaries
     df_emp, _, _, _, _, _, _ = load_data()
-    
     record = df_emp[df_emp['Employee_ID'] == emp_id]
-    
-    if record.empty:
-        return "❌ Error: Employee not found."
+    if record.empty: return "❌ Error: Employee not found."
 
-    # 1. Get Details
     current = record.iloc[0]['Salary']
     role = record.iloc[0]['Role']
     name = record.iloc[0]['Name']
     
-    # 2. Tenure Calculation
     try:
         join_date = datetime.strptime(str(record.iloc[0]['Join_Date']), "%Y-%m-%d")
         tenure = round((datetime.now() - join_date).days / 365, 1)
-    except:
-        tenure = "N/A"
+    except: tenure = "N/A"
 
-    # 3. Math
     hike_amt = current * (hike_percent / 100)
     new_sal = current + hike_amt
     
-    # 4. Peer Analysis
     peers = df_emp[df_emp['Role'] == role]
     avg = peers['Salary'].mean()
     min_s = peers['Salary'].min()
     max_s = peers['Salary'].max()
     
-    # 5. Band Logic (Simulated Band: Min-10% to Max+10%)
     band_min, band_max = min_s * 0.9, max_s * 1.1
+    pos = (new_sal - band_min) / (band_max - band_min) if band_max != band_min else 1.0
     
-    if band_max == band_min:
-        pos = 1.0
-    else:
-        pos = (new_sal - band_min) / (band_max - band_min)
-    
-    # 6. Recommendation Logic
     diff = new_sal - avg
     comp_text = "ABOVE" if diff > 0 else "BELOW"
-    
-    if pos > 0.85:
-        rec_text = "⚠️ **High Risk:** This hike pushes the employee to the top of the pay band. Ensure performance justifies this deviation."
-    else:
-        rec_text = "✅ **Safe:** This keeps the employee within a healthy retention range."
+    rec_text = "⚠️ **High Risk:** Pushes employee to top of band." if pos > 0.85 else "✅ **Safe:** Maintains healthy band position."
 
-    # 7. Final Output String
     return f"""
     ### 📊 Compensation Impact Report: {name}
     **{role}** | ⏳ **Tenure:** {tenure} Years
@@ -292,7 +298,7 @@ def calculate_hike_impact(emp_id: int, hike_percent: float) -> str:
     """
 
 # ---------------------------------------------------------
-# 3. TOOL DEFINITIONS (DOCSTRINGS REQUIRED)
+# 3. TOOL DEFINITIONS (WITH FULL INSTRUCTIONS)
 # ---------------------------------------------------------
 
 @tool
@@ -308,6 +314,10 @@ def draft_policy_email(query: str) -> str:
     
     Strictly adhere to this POLICY CONTEXT:
     {policy_text}
+    
+    **SPECIFIC INSTRUCTIONS:**
+    - If the request involves **Alcohol**, strictly state it is NOT reimbursable and will be deducted.
+    - If the request involves **Relocation/Visa**, explain the 'Fixed-Term Contractor' requirement.
     
     **MANDATORY FORMAT STRUCTURE:**
     1. **Subject:** [Clear Subject Line]
@@ -340,7 +350,6 @@ def audit_data_integrity(query: str) -> str:
     
     if missing_ids:
         issues.append(f"\n**🟠 Found {len(missing_ids)} employees missing Emergency Contacts:**")
-        # Just show IDs if list is long to avoid clutter, or names if manageable
         issues.append(f"(IDs: {missing_ids[:10]}... see database for full list)")
 
     if not issues: return "✅ **Data Audit Complete:** All records are clean."
@@ -348,61 +357,41 @@ def audit_data_integrity(query: str) -> str:
 
 @tool
 def send_correction_emails(issue_summary: str) -> str:
-    """
-    Triggers the correction email campaign.
-    Use this when the user says 'Send emails' or 'Fix data'.
-    """
-    return "📧 **ACTION:** Targeted emails have been sent to identified employees."
+    """Triggers the correction email campaign."""
+    return "📧 **ACTION:** Targeted emails sent to identified employees."
 
 @tool
 def verify_data_remediation(query: str) -> str:
-    """
-    Verifies if the data gaps have been closed.
-    Use this to 'Verify success' or 'Check status'.
-    """
+    """Verifies if the data gaps have been closed."""
     df_emp, _, _, df_cont, _, _, _ = load_data()
     m_email = df_emp[df_emp['Email'].isnull() | (df_emp['Email'] == "")].shape[0]
-    m_cont = len(set(df_emp['Employee_ID']) - set(df_cont['Employee_ID']))
-    
-    if m_email == 0 and m_cont == 0: return "🎉 **SUCCESS:** All data gaps closed. 100% Compliant."
-    return f"⚠️ **Status:** Waiting on {m_email} emails and {m_cont} contacts."
+    if m_email == 0: return "🎉 **SUCCESS:** All data gaps closed."
+    return f"⚠️ **Status:** Waiting on {m_email} emails."
 
 @tool
 def analyze_compensation_adjustment(query: str) -> str:
-    """
-    Wrapper for hike logic. 
-    Use this if the user asks about salary hikes in the Chat.
-    """
+    """Wrapper for hike logic."""
     import re
     hike_match = re.search(r'(\d+)%', query)
     percent = float(hike_match.group(1)) if hike_match else 10.0
     id_match = re.search(r'\b(1\d{2})\b', query)
     if id_match: return calculate_hike_impact(int(id_match.group(1)), percent)
-    return "⚠️ Please use the Compensation Modeler in the sidebar for this request."
+    return "⚠️ Use the Sidebar Modeler."
 
 @tool
 def enroll_benefit(req: str) -> str:
-    """
-    Enrolls an employee in benefits.
-    Use this for 'Enroll in Gym', 'Add insurance', etc.
-    """
+    """Enrolls an employee in benefits."""
     return f"✅ Benefit '{req}' logged."
 
 @tool
 def read_policy(q: str) -> str:
-    """
-    Reads the HR Policy handbook.
-    Use this for questions about rules, leave, or code of conduct.
-    """
+    """Reads the HR Policy handbook."""
     _, _, _, _, _, _, text = load_data()
     return f"Context:\n{text}"
 
 @tool
 def check_onboarding_status(name: str) -> str:
-    """
-    Checks the onboarding status of a candidate.
-    Use this for 'Status of Alex', 'Is John onboarded?'.
-    """
+    """Checks the onboarding status of a candidate."""
     _, _, df_onb, _, _, _, _ = load_data()
     rec = df_onb[df_onb['Employee_Name'].str.contains(name, case=False, na=False)]
     if rec.empty: return "No record."
@@ -410,22 +399,21 @@ def check_onboarding_status(name: str) -> str:
 
 @tool
 def send_reminders(act: str) -> str:
-    """
-    Sends generic email reminders.
-    Use this for 'Nudge candidate', 'Send reminder'.
-    """
+    """Sends generic email reminders."""
     return f"🚀 Reminders sent for '{act}'."
 
 # ---------------------------------------------------------
 # 4. AGENT CONFIGURATION
 # ---------------------------------------------------------
 def get_hr_agent():
-    # LOAD ALL DATA (7 ITEMS)
+    # LOAD ALL DATA
     df_emp, df_cand, df_onb, df_cont, df_att, df_eng, policy_text = load_data()
     
+    if df_emp is None:
+        return "CRITICAL ERROR: Data could not be generated."
+
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0, google_api_key=GOOGLE_API_KEY)
     
-    # Pass ALL dataframes to the Analyst
     analytics_agent = create_pandas_dataframe_agent(
         llm, 
         [df_emp, df_cand, df_att, df_eng], 
