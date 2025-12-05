@@ -1,0 +1,10 @@
+streamlit
+pandas
+langchain-google-genai
+langchain-experimental
+python-dotenv
+faker
+tabulate
+openpyxl
+google-generativeai
+graphviz
